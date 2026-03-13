@@ -95,9 +95,46 @@ ENERGY_PRESET = DemoPreset(
     description="Expanded energy chain basket spanning majors, upstream, services, midstream, refiners, and benchmark contracts.",
 )
 
+IRAN_SUPPLY_SHOCK_PRESET = DemoPreset(
+    name="Iran Supply Shock Basket",
+    tickers=[
+        "XOM",
+        "CVX",
+        "COP",
+        "OXY",
+        "EOG",
+        "SLB",
+        "HAL",
+        "BKR",
+        "VLO",
+        "MPC",
+        "LNG",
+        "EQT",
+        "KMI",
+        "WMB",
+        "CF",
+        "MOS",
+        "NTR",
+        "ICL",
+        "XLE",
+        "CL=F",
+        "NG=F",
+    ],
+    benchmark="XLE",
+    peer_groups={
+        "oil producers": ["XOM", "CVX", "COP", "OXY", "EOG", "XLE"],
+        "services and downstream": ["SLB", "HAL", "BKR", "VLO", "MPC"],
+        "gas and transport": ["LNG", "EQT", "KMI", "WMB", "NG=F"],
+        "fertilizers": ["CF", "MOS", "NTR", "ICL"],
+        "commodities": ["CL=F", "NG=F", "XLE"],
+    },
+    description="Energy, gas, and fertilizer names with sensitivity to Middle East supply disruption, shipping pressure, and higher input costs.",
+)
+
 PRESETS: dict[str, DemoPreset] = {
     TECH_PRESET.name: TECH_PRESET,
     ENERGY_PRESET.name: ENERGY_PRESET,
+    IRAN_SUPPLY_SHOCK_PRESET.name: IRAN_SUPPLY_SHOCK_PRESET,
 }
 
 TICKER_SECTOR_MAP: dict[str, str] = {
@@ -140,6 +177,10 @@ TICKER_SECTOR_MAP: dict[str, str] = {
     "WMB": "natural-gas",
     "LNG": "natural-gas",
     "EQT": "natural-gas",
+    "CF": "fertilizers",
+    "MOS": "fertilizers",
+    "NTR": "fertilizers",
+    "ICL": "fertilizers",
     "XLE": "energy-etf",
     "CL=F": "oil",
     "NG=F": "natural-gas",
@@ -149,8 +190,9 @@ THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
     "AI infrastructure demand": ("ai", "accelerator", "gpu", "data center", "inference", "h100", "training"),
     "Cloud and platform spend": ("cloud", "capex", "enterprise", "platform", "software", "m365", "iphone"),
     "Semiconductor supply chain": ("semiconductor", "chip", "wafer", "capacity", "export control", "foundry"),
-    "Energy supply and OPEC": ("opec", "supply", "barrel", "crude", "inventory", "refinery", "production"),
+    "Energy supply and OPEC": ("opec", "supply", "barrel", "crude", "inventory", "refinery", "production", "hormuz", "tanker"),
     "Gas and weather": ("lng", "gas", "weather", "storage", "pipeline", "heating", "natgas"),
+    "Fertilizer and crop inputs": ("fertilizer", "urea", "ammonia", "potash", "crop input", "phosphate", "nitrogen"),
     "Rates and macro": ("rates", "treasury", "macro", "inflation", "fed", "yield"),
     "Earnings and guidance": ("earnings", "guidance", "outlook", "revenue", "margin", "bookings"),
     "Regulation and policy": ("antitrust", "regulation", "policy", "tariff", "sanction", "export"),

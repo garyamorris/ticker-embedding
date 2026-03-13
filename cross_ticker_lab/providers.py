@@ -168,10 +168,10 @@ class SyntheticMarketDataProvider(MarketDataProvider):
             ticker_rng = np.random.default_rng(_stable_seed(ticker, start.isoformat()))
             sector = infer_sector(ticker)
             tech_beta = 0.85 if sector in {"semiconductors", "software-platform", "consumer-tech", "growth-index"} else 0.15
-            energy_beta = 0.9 if sector in {"integrated-energy", "energy-etf", "oil", "natural-gas"} else 0.1
-            market_beta = 0.95 if ticker not in {"CL=F", "NG=F"} else 0.45
+            energy_beta = 0.9 if sector in {"integrated-energy", "energy-etf", "oil", "natural-gas"} else 0.45 if sector == "fertilizers" else 0.1
+            market_beta = 0.8 if sector == "fertilizers" else 0.95 if ticker not in {"CL=F", "NG=F"} else 0.45
             idiosyncratic = ticker_rng.normal(0.0, 0.014, size=len(index))
-            drift = 0.0009 if sector in {"semiconductors", "software-platform"} else 0.0003
+            drift = 0.0009 if sector in {"semiconductors", "software-platform"} else 0.00045 if sector == "fertilizers" else 0.0003
             if ticker == "QQQ":
                 drift = 0.0006
                 tech_beta = 0.6
@@ -198,6 +198,9 @@ class SyntheticMarketDataProvider(MarketDataProvider):
                 returns[event_positions[1]] += 0.05
             if ticker in {"XOM", "CVX", "SHEL", "XLE"}:
                 returns[event_positions[2]] += 0.04
+            if sector == "fertilizers":
+                returns[event_positions[1]] += 0.02
+                returns[event_positions[2]] += 0.03
             if ticker in {"AAPL", "MSFT"}:
                 returns[event_positions[3]] -= 0.03
 
@@ -354,6 +357,9 @@ class SyntheticNewsProvider(NewsProvider):
             ],
             "natural-gas": [
                 ("Gas and weather", "Natural-gas traders reset positioning around weather, storage, and LNG export utilization."),
+            ],
+            "fertilizers": [
+                ("Fertilizer and crop inputs", "Crop nutrient names react to tighter ammonia, urea, and freight markets when gas-linked inputs move higher."),
             ],
         }
 

@@ -185,6 +185,22 @@ def format_tickers_for_input(tickers: list[str], per_line: int = 6) -> str:
     return "\n".join(", ".join(tickers[index : index + per_line]) for index in range(0, len(tickers), per_line))
 
 
+def format_peer_groups_for_input(peer_groups: dict[str, list[str]]) -> str:
+    return "\n".join(f"{name}: {', '.join(members)}" for name, members in peer_groups.items())
+
+
+def load_group_into_state(group_name: str) -> None:
+    preset = PRESETS[group_name]
+    st.session_state["selected_group"] = group_name
+    st.session_state["tickers_raw"] = format_tickers_for_input(preset.tickers)
+    st.session_state["benchmark_input"] = preset.benchmark
+    st.session_state["peer_groups_raw"] = format_peer_groups_for_input(preset.peer_groups)
+
+
+def on_group_change() -> None:
+    load_group_into_state(st.session_state["selected_group"])
+
+
 def parse_peer_groups(raw_value: str) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     for line in raw_value.splitlines():
@@ -319,7 +335,14 @@ def render_news_evidence(news_frame: pd.DataFrame) -> None:
 def main() -> None:
     config = load_config()
     preset_names = list(PRESETS.keys())
-    preset = PRESETS[preset_names[0]]
+    default_group_name = "Iran Supply Shock Basket" if "Iran Supply Shock Basket" in PRESETS else preset_names[0]
+    if st.session_state.get("_group_loader_version") != 2:
+        load_group_into_state(default_group_name)
+        st.session_state["_group_loader_version"] = 2
+    elif st.session_state.get("selected_group") not in PRESETS:
+        load_group_into_state(default_group_name)
+    selected_group = st.sidebar.selectbox("Stock group", preset_names, key="selected_group", on_change=on_group_change)
+    preset = PRESETS[selected_group]
     default_start = date.today() - timedelta(days=365)
     default_end = date.today()
 
@@ -336,12 +359,12 @@ def main() -> None:
         '<div class="app-caption">The app can run on live Yahoo Finance data, or fall back to deterministic synthetic market and narrative inputs when live calls are unavailable.</div>',
         unsafe_allow_html=True,
     )
+    st.sidebar.caption(preset.description)
+    st.sidebar.button("Reload group defaults", use_container_width=True, on_click=load_group_into_state, args=(selected_group,))
 
     with st.sidebar.form("controls"):
-        selected_preset = st.selectbox("Demo basket", preset_names, index=0)
-        preset = PRESETS[selected_preset]
-        tickers_raw = st.text_area("Tickers", value=format_tickers_for_input(preset.tickers), height=110)
-        benchmark = st.text_input("Benchmark ticker", value=preset.benchmark).upper()
+        tickers_raw = st.text_area("Tickers", key="tickers_raw", height=110)
+        benchmark = st.text_input("Benchmark ticker", key="benchmark_input").upper()
         lookback_days = st.select_slider("Lookback period", options=[90, 120, 180, 252, 365], value=180)
         interval = st.selectbox("Interval", options=["1d"], index=0)
         embedding_window = st.slider("Rolling embedding window", min_value=15, max_value=60, value=30, step=5)
@@ -351,11 +374,7 @@ def main() -> None:
         price_weight = st.slider("Price embedding weight", min_value=0.0, max_value=1.0, value=0.65, step=0.05)
         news_weight = 1.0 - price_weight
         st.caption(f"Fused embedding weights: price `{price_weight:.2f}` | news `{news_weight:.2f}`")
-        peer_groups_raw = st.text_area(
-            "Optional peer groups",
-            value="\n".join(f"{name}: {', '.join(members)}" for name, members in preset.peer_groups.items()),
-            height=110,
-        )
+        peer_groups_raw = st.text_area("Optional peer groups", key="peer_groups_raw", height=110)
         historical_range = st.date_input("Analogue search date range", value=(default_start, default_end))
         submitted = st.form_submit_button("Run analysis", use_container_width=True)
 

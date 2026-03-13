@@ -53,10 +53,11 @@ or:
 start.cmd
 ```
 
-## Default demo baskets
+## Default stock groups
 
 - `AI Infrastructure Basket`: `NVDA, AMD, AVGO, TSM, ASML, ARM, MU, QCOM, MRVL, AMAT, LRCX, KLAC, INTC, AAPL, MSFT, GOOGL, META, ORCL, CRM, QQQ, SMH`
 - `Energy Chain Basket`: `XOM, CVX, SHEL, BP, TTE, COP, EOG, OXY, SLB, HAL, BKR, MPC, VLO, PSX, KMI, WMB, LNG, EQT, CL=F, NG=F, XLE`
+- `Iran Supply Shock Basket`: `XOM, CVX, COP, OXY, EOG, SLB, HAL, BKR, VLO, MPC, LNG, EQT, KMI, WMB, CF, MOS, NTR, ICL, XLE, CL=F, NG=F`
 
 ## Notes
 
