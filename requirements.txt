@@ -1,0 +1,10 @@
+streamlit>=1.43
+pandas>=2.2
+numpy>=1.26
+scikit-learn>=1.5
+plotly>=6.0
+python-dotenv>=1.0
+yfinance>=0.2.54
+openai>=1.68
+# Optional accelerator:
+# faiss-cpu>=1.8
