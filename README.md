@@ -38,7 +38,19 @@ copy .env.example .env.local
 4. Start the app:
 
 ```bash
-streamlit run app.py
+python -m streamlit run app.py
+```
+
+On Windows, if you move the repository after creating `.venv`, the generated `streamlit.exe` launcher can stop working because it keeps the old path. The repo-local launchers avoid that:
+
+```powershell
+.\start.ps1
+```
+
+or:
+
+```cmd
+start.cmd
 ```
 
 ## Default demo baskets
