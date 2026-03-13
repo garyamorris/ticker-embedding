@@ -489,8 +489,16 @@ def find_historical_analogues(
     if basket_embedding_frame.empty:
         return pd.DataFrame(), basket_embedding_frame, "numpy"
     basket_matrix = normalize(np.vstack(vectors))
-    for index in range(basket_matrix.shape[1]):
-        basket_embedding_frame[f"dim_{index}"] = basket_matrix[:, index]
+    basket_embedding_frame = pd.concat(
+        [
+            basket_embedding_frame.reset_index(drop=True),
+            pd.DataFrame(
+                basket_matrix,
+                columns=[f"dim_{index}" for index in range(basket_matrix.shape[1])],
+            ),
+        ],
+        axis=1,
+    )
 
     latest_vector = basket_matrix[-1:]
     history_vectors = basket_matrix[:-embedding_window] if len(basket_matrix) > embedding_window else basket_matrix[:-1]

@@ -55,8 +55,8 @@ start.cmd
 
 ## Default demo baskets
 
-- `NVDA, AMD, MSFT, AAPL, QQQ, SMH`
-- `XOM, CVX, SHEL, CL=F, NG=F, XLE`
+- `AI Infrastructure Basket`: `NVDA, AMD, AVGO, TSM, ASML, ARM, MU, QCOM, MRVL, AMAT, LRCX, KLAC, INTC, AAPL, MSFT, GOOGL, META, ORCL, CRM, QQQ, SMH`
+- `Energy Chain Basket`: `XOM, CVX, SHEL, BP, TTE, COP, EOG, OXY, SLB, HAL, BKR, MPC, VLO, PSX, KMI, WMB, LNG, EQT, CL=F, NG=F, XLE`
 
 ## Notes
 

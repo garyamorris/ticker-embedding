@@ -67,6 +67,10 @@ def parse_tickers(raw_value: str) -> list[str]:
     return [token.strip().upper() for token in raw_value.replace("\n", ",").split(",") if token.strip()]
 
 
+def format_tickers_for_input(tickers: list[str], per_line: int = 6) -> str:
+    return "\n".join(", ".join(tickers[index : index + per_line]) for index in range(0, len(tickers), per_line))
+
+
 def parse_peer_groups(raw_value: str) -> dict[str, list[str]]:
     groups: dict[str, list[str]] = {}
     for line in raw_value.splitlines():
@@ -197,7 +201,7 @@ def main() -> None:
     with st.sidebar.form("controls"):
         selected_preset = st.selectbox("Demo basket", preset_names, index=0)
         preset = PRESETS[selected_preset]
-        tickers_raw = st.text_input("Tickers", value=", ".join(preset.tickers))
+        tickers_raw = st.text_area("Tickers", value=format_tickers_for_input(preset.tickers), height=110)
         benchmark = st.text_input("Benchmark ticker", value=preset.benchmark).upper()
         lookback_days = st.select_slider("Lookback period", options=[90, 120, 180, 252, 365], value=180)
         interval = st.selectbox("Interval", options=["1d"], index=0)
