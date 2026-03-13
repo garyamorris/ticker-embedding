@@ -15,22 +15,136 @@ st.set_page_config(page_title="Cross-Ticker Intelligence Lab", layout="wide", in
 st.markdown(
     """
     <style>
+    :root {
+        --surface-strong: linear-gradient(135deg, #131c29 0%, #172537 58%, #13353f 100%);
+        --surface-elevated: linear-gradient(135deg, rgba(14, 20, 31, 0.98) 0%, rgba(17, 27, 40, 0.98) 58%, rgba(15, 43, 53, 0.98) 100%);
+        --surface-control: rgba(10, 16, 24, 0.96);
+        --surface-border: rgba(89, 212, 196, 0.22);
+        --text-strong: #f4fbff;
+        --text-soft: rgba(235, 248, 255, 0.86);
+        --text-muted: rgba(188, 211, 224, 0.78);
+        --accent: #59d4c4;
+    }
+    .stApp {
+        --st-primary-color: #59d4c4;
+        --st-background-color: #040b14;
+        --st-secondary-background-color: rgba(17, 25, 39, 0.96);
+        --st-text-color: #f4fbff;
+    }
     .block-container { padding-top: 1.3rem; padding-bottom: 2rem; }
+    [data-testid="stAppViewContainer"] {
+        background: linear-gradient(180deg, #040b14 0%, #07101a 100%);
+    }
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #121925 0%, #171d2a 100%);
+        border-right: 1px solid rgba(89, 212, 196, 0.08);
+    }
     .hero {
         padding: 1.3rem 1.6rem;
         border-radius: 20px;
-        background: linear-gradient(135deg, #10233b 0%, #15354f 45%, #0f5257 100%);
-        color: #f4fbff;
-        border: 1px solid rgba(255,255,255,0.08);
-        box-shadow: 0 18px 38px rgba(7, 19, 32, 0.22);
+        background: var(--surface-strong);
+        color: var(--text-strong) !important;
+        border: 1px solid rgba(89, 212, 196, 0.14);
+        box-shadow: 0 18px 38px rgba(3, 9, 18, 0.28);
     }
-    .hero h1 { margin: 0; font-size: 2.1rem; letter-spacing: -0.04em; }
-    .hero p { margin: 0.5rem 0 0 0; color: rgba(244,251,255,0.86); }
+    .hero h1 {
+        margin: 0;
+        font-size: 2.1rem;
+        letter-spacing: -0.04em;
+        color: var(--text-strong) !important;
+        text-shadow: 0 1px 0 rgba(8, 18, 32, 0.35);
+    }
+    .hero p {
+        margin: 0.5rem 0 0 0;
+        color: var(--text-soft) !important;
+    }
+    .hero * {
+        color: inherit !important;
+    }
+    .app-caption {
+        margin: 0.45rem 0 1rem 0;
+        color: var(--text-muted);
+        font-size: 0.93rem;
+    }
     .section-note {
-        padding: 0.8rem 1rem;
+        padding: 0.95rem 1.05rem;
         border-radius: 16px;
-        background: #f5f8fb;
-        border: 1px solid #dbe5ee;
+        background: var(--surface-elevated);
+        border: 1px solid var(--surface-border);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 14px 28px rgba(3, 9, 18, 0.24);
+        color: var(--text-strong) !important;
+        line-height: 1.55;
+    }
+    .section-note * {
+        color: inherit !important;
+    }
+    .section-note-row + .section-note-row {
+        margin-top: 0.45rem;
+    }
+    .section-note-label {
+        display: inline-block;
+        margin-right: 0.35rem;
+        color: var(--accent) !important;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+    }
+    .section-note-value {
+        color: var(--text-strong) !important;
+    }
+    .stButton > button,
+    .stFormSubmitButton > button {
+        background: linear-gradient(135deg, #12323d 0%, #1a5159 100%) !important;
+        color: #f4fbff !important;
+        border: 1px solid rgba(89, 212, 196, 0.36) !important;
+        box-shadow: 0 10px 22px rgba(7, 22, 30, 0.28);
+        font-weight: 700 !important;
+    }
+    .stButton > button:hover,
+    .stFormSubmitButton > button:hover {
+        border-color: rgba(159, 239, 229, 0.68) !important;
+        box-shadow: 0 14px 26px rgba(7, 22, 30, 0.34);
+        filter: brightness(1.06);
+    }
+    .stButton > button:focus-visible,
+    .stFormSubmitButton > button:focus-visible {
+        outline: 2px solid rgba(89, 212, 196, 0.45) !important;
+        outline-offset: 2px !important;
+    }
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="base-input"] > div,
+    div[data-baseweb="select"] > div,
+    div[data-baseweb="textarea"] > div,
+    [data-testid="stDateInputField"] {
+        background: var(--surface-control) !important;
+        border: 1px solid rgba(89, 212, 196, 0.18) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+    }
+    div[data-baseweb="input"]:focus-within > div,
+    div[data-baseweb="base-input"]:focus-within > div,
+    div[data-baseweb="select"]:focus-within > div,
+    div[data-baseweb="textarea"]:focus-within > div,
+    [data-testid="stDateInputField"]:focus-within {
+        border-color: rgba(89, 212, 196, 0.42) !important;
+        box-shadow: 0 0 0 1px rgba(89, 212, 196, 0.34), 0 0 0 4px rgba(89, 212, 196, 0.10) !important;
+    }
+    input,
+    textarea {
+        color: var(--text-strong) !important;
+        caret-color: var(--accent) !important;
+    }
+    [data-baseweb="select"] * {
+        color: var(--text-strong) !important;
+    }
+    .stSlider [data-baseweb="slider"] [role="slider"] {
+        background: #59d4c4 !important;
+        border: 2px solid rgba(6, 17, 25, 0.9) !important;
+        box-shadow: 0 0 0 4px rgba(89, 212, 196, 0.14) !important;
+    }
+    button[data-baseweb="tab"] {
+        color: var(--text-soft) !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: var(--accent) !important;
     }
     </style>
     """,
@@ -83,19 +197,41 @@ def parse_peer_groups(raw_value: str) -> dict[str, list[str]]:
     return groups
 
 
+def apply_plotly_theme(figure: go.Figure) -> go.Figure:
+    axis_style = dict(
+        gridcolor="rgba(120, 160, 182, 0.10)",
+        zerolinecolor="rgba(120, 160, 182, 0.14)",
+        linecolor="rgba(120, 160, 182, 0.18)",
+    )
+    figure.update_layout(
+        paper_bgcolor="#040b14",
+        plot_bgcolor="#040b14",
+        font=dict(color="#f4fbff"),
+        title=dict(font=dict(color="#f4fbff", size=18)),
+        legend=dict(bgcolor="rgba(0,0,0,0)", borderwidth=0, font=dict(color="#f4fbff")),
+        coloraxis_colorbar=dict(
+            tickfont=dict(color="#f4fbff"),
+            title=dict(font=dict(color="#f4fbff")),
+        ),
+    )
+    figure.update_xaxes(**axis_style)
+    figure.update_yaxes(**axis_style)
+    return figure
+
+
 def make_heatmap(frame: pd.DataFrame, title: str, zmid: float | None = None) -> go.Figure:
     if frame.empty:
         return go.Figure()
     figure = px.imshow(
         frame.round(2),
         text_auto=".2f",
-        color_continuous_scale="Tealgrn",
+        color_continuous_scale=["#baf3d2", "#7fe0c6", "#45c0c0", "#2b91b0"],
         aspect="auto",
         zmin=-1 if zmid == 0 else None,
         zmax=1 if zmid == 0 else None,
     )
     figure.update_layout(title=title, margin=dict(l=10, r=10, t=45, b=10), coloraxis_colorbar_title="")
-    return figure
+    return apply_plotly_theme(figure)
 
 
 def make_cumulative_return_chart(frame: pd.DataFrame) -> go.Figure:
@@ -105,7 +241,7 @@ def make_cumulative_return_chart(frame: pd.DataFrame) -> go.Figure:
     melted = plot_frame.melt(id_vars=plot_frame.columns[0], var_name="ticker", value_name="cumulative_return")
     figure = px.line(melted, x=plot_frame.columns[0], y="cumulative_return", color="ticker", title="Cumulative Returns")
     figure.update_layout(margin=dict(l=10, r=10, t=45, b=10), yaxis_tickformat=".0%")
-    return figure
+    return apply_plotly_theme(figure)
 
 
 def make_embedding_scatter(frame: pd.DataFrame, title: str) -> go.Figure:
@@ -120,11 +256,11 @@ def make_embedding_scatter(frame: pd.DataFrame, title: str) -> go.Figure:
         hover_name="ticker",
         hover_data={"headline_count": True, "news_sentiment": ":.2f", "cluster": True, "outlier_score": ":.2f"},
         title=title,
-        color_continuous_scale="Teal",
+        color_continuous_scale=["#7fe0c6", "#45c0c0", "#2b91b0"],
     )
     figure.update_traces(marker=dict(line=dict(width=1, color="#0d2137")))
     figure.update_layout(margin=dict(l=10, r=10, t=45, b=10))
-    return figure
+    return apply_plotly_theme(figure)
 
 
 def make_network_chart(embedding_frame: pd.DataFrame, edges: pd.DataFrame) -> go.Figure:
@@ -140,7 +276,7 @@ def make_network_chart(embedding_frame: pd.DataFrame, edges: pd.DataFrame) -> go
                 x=[coordinates.loc[edge["source"], "x"], coordinates.loc[edge["target"], "x"]],
                 y=[coordinates.loc[edge["source"], "y"], coordinates.loc[edge["target"], "y"]],
                 mode="lines",
-                line=dict(width=max(1, edge["weight"] * 4), color="rgba(21, 82, 87, 0.35)"),
+                line=dict(width=max(1, edge["weight"] * 4), color="rgba(35, 157, 170, 0.28)"),
                 hoverinfo="skip",
                 showlegend=False,
             )
@@ -155,15 +291,15 @@ def make_network_chart(embedding_frame: pd.DataFrame, edges: pd.DataFrame) -> go
             marker=dict(
                 size=18,
                 color=embedding_frame["cluster"],
-                colorscale="Tealgrn",
-                line=dict(width=1.2, color="#10233b"),
+                colorscale=[[0.0, "#4bc2be"], [0.5, "#2f93b2"], [1.0, "#baf3d2"]],
+                line=dict(width=1.2, color="#0d1b2a"),
             ),
             hovertemplate="Ticker=%{text}<br>Cluster=%{marker.color}<extra></extra>",
             showlegend=False,
         )
     )
     figure.update_layout(title="Similarity Network", margin=dict(l=10, r=10, t=45, b=10), xaxis_visible=False, yaxis_visible=False)
-    return figure
+    return apply_plotly_theme(figure)
 
 
 def render_news_evidence(news_frame: pd.DataFrame) -> None:
@@ -196,7 +332,10 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.caption("The app can run on live Yahoo Finance data, or fall back to deterministic synthetic market and narrative inputs when live calls are unavailable.")
+    st.markdown(
+        '<div class="app-caption">The app can run on live Yahoo Finance data, or fall back to deterministic synthetic market and narrative inputs when live calls are unavailable.</div>',
+        unsafe_allow_html=True,
+    )
 
     with st.sidebar.form("controls"):
         selected_preset = st.selectbox("Demo basket", preset_names, index=0)
@@ -266,8 +405,14 @@ def main() -> None:
     st.markdown(
         f"""
         <div class="section-note">
-            <strong>Executive read:</strong> {report.synthesis.executive_summary}<br/>
-            <strong>Why basket analysis matters:</strong> {report.synthesis.why_multi_ticker_matters}
+            <div class="section-note-row">
+                <span class="section-note-label">Executive read:</span>
+                <span class="section-note-value">{report.synthesis.executive_summary}</span>
+            </div>
+            <div class="section-note-row">
+                <span class="section-note-label">Why basket analysis matters:</span>
+                <span class="section-note-value">{report.synthesis.why_multi_ticker_matters}</span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
