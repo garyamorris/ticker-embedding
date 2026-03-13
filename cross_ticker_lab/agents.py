@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel, Field
 
 from .analytics import build_embedding_report, build_market_report, build_news_report, classify_query
 from .config import AppConfig
@@ -27,12 +30,70 @@ from .providers import (
     ResilientMarketDataProvider,
     ResilientNewsProvider,
     build_embedding_provider,
+    build_openai_client,
 )
 
 try:  # pragma: no cover - optional dependency
     from openai import OpenAI
 except ImportError:  # pragma: no cover
     OpenAI = None
+
+
+TICKER_QUERY_ALIASES: dict[str, tuple[str, ...]] = {
+    "AAPL": ("apple", "apple inc"),
+    "MSFT": ("microsoft",),
+    "GOOGL": ("google", "alphabet"),
+    "META": ("facebook", "meta platforms"),
+    "ORCL": ("oracle",),
+    "CRM": ("salesforce",),
+    "NVDA": ("nvidia",),
+    "AMD": ("advanced micro devices",),
+    "AVGO": ("broadcom",),
+    "TSM": ("tsmc", "taiwan semiconductor"),
+    "ASML": ("asml holding",),
+    "ARM": ("arm holdings",),
+    "MU": ("micron", "micron technology"),
+    "QCOM": ("qualcomm",),
+    "MRVL": ("marvell",),
+    "AMAT": ("applied materials",),
+    "LRCX": ("lam research",),
+    "KLAC": ("kla",),
+    "INTC": ("intel",),
+    "SMH": ("semiconductor etf", "vaneck semiconductor"),
+    "QQQ": ("nasdaq 100 etf", "invesco qqq"),
+    "XOM": ("exxon", "exxon mobil"),
+    "CVX": ("chevron",),
+    "COP": ("conocophillips",),
+    "EOG": ("eog resources",),
+    "OXY": ("occidental", "occidental petroleum"),
+    "SLB": ("schlumberger",),
+    "HAL": ("halliburton",),
+    "BKR": ("baker hughes",),
+    "VLO": ("valero",),
+    "MPC": ("marathon petroleum",),
+    "PSX": ("phillips 66",),
+    "LNG": ("cheniere", "cheniere energy"),
+    "EQT": ("eqt corporation",),
+    "KMI": ("kinder morgan",),
+    "WMB": ("williams companies",),
+    "CF": ("cf industries",),
+    "MOS": ("mosaic",),
+    "NTR": ("nutrien",),
+    "ICL": ("icl group",),
+    "SHEL": ("shell plc",),
+    "BP": ("bp plc", "british petroleum"),
+    "TTE": ("totalenergies",),
+    "XLE": ("energy etf", "energy select sector spdr"),
+    "CL=F": ("wti crude", "crude futures", "oil futures"),
+    "NG=F": ("natural gas futures", "natgas futures"),
+}
+
+
+class ReasoningLLMResponse(BaseModel):
+    answer: str = Field(default="")
+    reasoning: list[str] = Field(default_factory=list)
+    counterpoints: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
 
 
 class BaseAgent:
@@ -374,7 +435,8 @@ class NarrativeSynthesisAgent(BaseAgent):
 
     def __init__(self, config: AppConfig) -> None:
         self.config = config
-        self.client = OpenAI(api_key=config.openai_api_key) if config.enable_llm_synthesis and config.openai_api_key and OpenAI is not None else None
+        self.client = build_openai_client(config.openai_api_key) if config.enable_llm_synthesis and config.openai_api_key and OpenAI is not None else None
+        self._last_llm_error: str | None = None
 
     def run(self, insights: InsightReport) -> tuple[SynthesisReport, AgentTrace]:
         executive = " | ".join(insight.title for insight in insights.ranked[:3])
@@ -395,6 +457,8 @@ class NarrativeSynthesisAgent(BaseAgent):
     def answer_query(self, query: str, orchestration_report: OrchestrationReport) -> QueryResponse:
         query_type = classify_query(query)
         answer, evidence = self._rule_based_answer(query_type, orchestration_report)
+        model_name = "deterministic"
+        warning = None
         if self.client is not None:
             try:
                 response = self.client.responses.create(
@@ -403,9 +467,16 @@ class NarrativeSynthesisAgent(BaseAgent):
                 )
                 if getattr(response, "output_text", None):
                     answer = response.output_text
-            except Exception:
-                pass
-        return QueryResponse(query_type=query_type, answer=answer, evidence=evidence)
+                    model_name = self.config.openai_response_model
+            except Exception as exc:
+                warning = f"OpenAI synthesis unavailable: {self._format_exception(exc)}"
+        return QueryResponse(query_type=query_type, answer=answer, evidence=evidence, mode="overview", model_name=model_name, warning=warning)
+
+    @staticmethod
+    def _format_exception(exc: Exception) -> str:
+        cause = getattr(exc, "__cause__", None)
+        detail = str(cause or exc).strip()
+        return detail if len(detail) <= 180 else f"{detail[:177]}..."
 
     def _rule_based_answer(self, query_type: str, report: OrchestrationReport) -> tuple[str, list[str]]:
         insights = report.insights
@@ -440,6 +511,467 @@ class NarrativeSynthesisAgent(BaseAgent):
             f"Ranked insights:\n{ranked}\n"
             f"Evidence:\n{evidence_block}\n"
         )
+
+
+class ReasoningQueryAgent(BaseAgent):
+    name = "Reasoning Query Agent"
+    objective = "Answer questions with multi-step reasoning across basket regime, peer structure, narratives, analogues, and risk."
+
+    def __init__(self, config: AppConfig) -> None:
+        self.config = config
+        self.client = build_openai_client(config.openai_api_key) if config.enable_llm_synthesis and config.openai_api_key and OpenAI is not None else None
+
+    def answer_query(self, query: str, report: OrchestrationReport, model_override: str | None = None) -> QueryResponse:
+        query_type = classify_query(query)
+        mentioned_tickers = self._extract_query_mentions(query, report)
+        in_basket_tickers = [ticker for ticker in mentioned_tickers if ticker in report.request.normalized_tickers]
+        off_basket_tickers = [ticker for ticker in mentioned_tickers if ticker not in report.request.normalized_tickers]
+        model_name = "deterministic"
+        warning = None
+
+        if in_basket_tickers:
+            answer, reasoning, counterpoints, evidence = self._focused_answer(query, report, in_basket_tickers[:2])
+            if off_basket_tickers:
+                ignored_names = ", ".join(off_basket_tickers[:2])
+                counterpoints.insert(
+                    0,
+                    f"{ignored_names} {'is' if len(off_basket_tickers[:2]) == 1 else 'are'} not in the current basket, so the reasoning read only used current constituents.",
+                )
+        else:
+            if off_basket_tickers:
+                answer, reasoning, counterpoints, evidence = self._out_of_basket_answer(off_basket_tickers, report)
+                model_name = "scope guard"
+            else:
+                answer, reasoning, counterpoints, evidence = self._basket_answer(query_type, report)
+
+        if self.client is not None and model_name != "scope guard":
+            selected_model = model_override or self.config.openai_reasoning_model
+            llm_response = self._llm_answer(
+                query=query,
+                query_type=query_type,
+                report=report,
+                focus_tickers=in_basket_tickers[:2],
+                selected_model=selected_model,
+                fallback_answer=answer,
+                fallback_reasoning=reasoning,
+                fallback_counterpoints=counterpoints,
+                fallback_evidence=evidence,
+            )
+            if llm_response is not None:
+                answer, reasoning, counterpoints, evidence = llm_response
+                model_name = selected_model
+            else:
+                model_name = "deterministic fallback"
+                if self._last_llm_error is not None:
+                    warning = f"OpenAI reasoning unavailable: {self._last_llm_error}"
+
+        return QueryResponse(
+            query_type=query_type,
+            answer=answer,
+            evidence=evidence,
+            mode="reasoning",
+            reasoning=reasoning,
+            counterpoints=counterpoints,
+            model_name=model_name,
+            warning=warning,
+        )
+
+    def _basket_answer(self, query_type: str, report: OrchestrationReport) -> tuple[str, list[str], list[str], list[str]]:
+        regime = report.market.regime_summary
+        top_sync = report.insights.synchronized_moves[0] if report.insights.synchronized_moves else None
+        top_divergences = report.insights.divergences[:2]
+        top_narrative = report.insights.narratives[0] if report.insights.narratives else None
+        top_analogue = report.insights.analogues[0] if report.insights.analogues else None
+        top_risk = report.risk.alerts[0] if report.risk.alerts else None
+
+        if query_type == "historical_analogue" and top_analogue is not None:
+            answer = f"{top_analogue.description} The current regime is {regime['label'].lower()}, so the analogue matters mainly as context for the whole basket rather than for one isolated name."
+        elif query_type == "narrative" and top_narrative is not None:
+            answer = f"{top_narrative.description} The reason it matters is that the basket is still correlated enough for shared narrative propagation to move several names together."
+        elif query_type == "regime":
+            answer = f"The basket reads as {regime['label'].lower()}. Mean pairwise correlation is {regime['mean_pairwise_corr']:.2f}, 20-day basket return is {regime['basket_return_20d']:.1%}, and the current setup looks driven by common state before idiosyncratic stories fully separate."
+        else:
+            sync_summary = top_sync.description if top_sync is not None else "The basket still has common structure, but no dominant synchronized cluster stands out."
+            narrative_summary = top_narrative.description if top_narrative is not None else "There is no single dominant mapped narrative."
+            risk_summary = top_risk.reason if top_risk is not None else "No single alert dominates the current setup."
+            answer = f"The basket is in a {regime['label'].lower()} regime. {sync_summary} {narrative_summary} The main thing that could break the current read is {risk_summary.lower()}"
+
+        reasoning: list[str] = [
+            f"Regime: 20-day basket return is {regime['basket_return_20d']:.1%}, mean pairwise correlation is {regime['mean_pairwise_corr']:.2f}, and recent dispersion is {regime['recent_dispersion']:.4f} versus {regime['historical_dispersion']:.4f} historically.",
+        ]
+        if top_sync is not None:
+            reasoning.append(f"Structure: {top_sync.description}")
+        if top_divergences:
+            divergence_names = ", ".join(insight.title.split(' is ')[0] for insight in top_divergences)
+            reasoning.append(f"Divergence: the main names breaking from the pack are {divergence_names}, which means the basket is not moving as a single undifferentiated beta trade.")
+        if top_narrative is not None:
+            reasoning.append(f"Narratives: {top_narrative.description}")
+        if top_analogue is not None:
+            reasoning.append(f"Historical context: {top_analogue.description}")
+        if top_risk is not None:
+            reasoning.append(f"Risk check: {top_risk.reason}")
+
+        counterpoints = [
+            "If pairwise correlation falls and the current divergence names normalize, the basket-level story becomes less coherent and more stock-specific.",
+        ]
+        if top_risk is not None and top_risk.ticker == "BASKET":
+            counterpoints.append("Cross-sectional dispersion is already elevated, so single-name views can override the basket narrative faster than usual.")
+        elif regime["mean_pairwise_corr"] >= 0.6:
+            counterpoints.append("Correlation is still high enough that broad beta can overwhelm a seemingly clean narrative read.")
+        if top_analogue is None:
+            counterpoints.append("There is no strong historical analogue anchor, so this answer leans more on current structure than on prior episodes.")
+
+        evidence = self._dedupe_items(
+            [
+                *(top_sync.evidence[:2] if top_sync is not None else []),
+                *(top_narrative.evidence[:2] if top_narrative is not None else []),
+                *(top_analogue.evidence[:1] if top_analogue is not None else []),
+                *(top_risk.evidence[:2] if top_risk is not None else []),
+            ]
+        )
+        return answer, reasoning, counterpoints, evidence
+
+    def _focused_answer(self, query: str, report: OrchestrationReport, focus_tickers: list[str]) -> tuple[str, list[str], list[str], list[str]]:
+        advice_terms = ("buy", "sell", "long", "short", "bullish", "bearish", "add", "trim")
+        advice_preface = "This is a basket-relative read, not a standalone buy or sell recommendation. " if any(term in query.lower() for term in advice_terms) else ""
+        regime = report.market.regime_summary
+        analogue_frame = report.embeddings.analogue_frame
+        analogue_hint = ""
+        if not analogue_frame.empty:
+            analogue_mean = analogue_frame.head(3)["forward_5d_basket_return"].mean()
+            analogue_hint = f" The nearest analogue set implies an average forward 5-day basket move of {analogue_mean:.1%}, which is context for the backdrop rather than a prediction."
+
+        answer_parts: list[str] = []
+        reasoning: list[str] = []
+        counterpoints: list[str] = []
+        evidence: list[str] = []
+
+        for ticker in focus_tickers:
+            snapshot = self._ticker_snapshot(report, ticker)
+            if snapshot is None:
+                continue
+
+            if snapshot["is_divergent"]:
+                if snapshot["return_20d"] > snapshot["peer_return_20d"] and snapshot["headline_count"] >= 2:
+                    stance = "is breaking out versus its peers with narrative confirmation"
+                elif snapshot["return_20d"] > snapshot["peer_return_20d"]:
+                    stance = "is outperforming peers, but the move is light on mapped narrative confirmation"
+                elif snapshot["return_20d"] < snapshot["peer_return_20d"]:
+                    stance = "is lagging its peers and currently reads as a relative weak spot"
+                else:
+                    stance = "is diverging from its peers, so the name is trading more idiosyncratically than the rest of the basket"
+            elif snapshot["avg_pair_corr"] >= regime["mean_pairwise_corr"]:
+                stance = "is still trading mostly with the basket rather than on a standalone catalyst"
+            else:
+                stance = "is not the main driver of the basket right now"
+
+            answer_parts.append(
+                f"{ticker} {stance}. Its 20-day return is {snapshot['return_20d']:.1%} versus {snapshot['peer_return_20d']:.1%} for {snapshot['peer_label']}, and its dominant mapped theme is {snapshot['dominant_theme']}."
+            )
+            reasoning.append(
+                f"{ticker} peer context: {snapshot['peer_label']} are at {snapshot['peer_return_20d']:.1%} over 20 days versus {snapshot['return_20d']:.1%} for {ticker}; relative strength is {snapshot['relative_strength']:.1%} and average pairwise correlation is {snapshot['avg_pair_corr']:.2f}."
+            )
+            reasoning.append(
+                f"{ticker} narrative context: mapped headline count is {snapshot['headline_count']}, dominant theme is {snapshot['dominant_theme']}, and nearest embedding neighbors are {snapshot['neighbors']}."
+            )
+            if snapshot["risk_reason"]:
+                reasoning.append(f"{ticker} risk check: {snapshot['risk_reason']}")
+
+            counterpoints.append(f"{ticker}: a new company-specific catalyst could override the current peer-relative read quickly.")
+            if regime["mean_pairwise_corr"] >= 0.6:
+                counterpoints.append(f"{ticker}: the basket is still correlated enough that market beta can dominate the single-name setup.")
+            if snapshot["headline_count"] == 0:
+                counterpoints.append(f"{ticker}: there is little mapped narrative support, so the read is coming more from structure than from confirmed catalyst flow.")
+
+            evidence.extend(
+                [
+                    f"{ticker} 20-day return: {snapshot['return_20d']:.1%}.",
+                    f"{ticker} peer reference ({snapshot['peer_label']}): {snapshot['peer_members'] or 'none available'}.",
+                    f"{ticker} dominant theme: {snapshot['dominant_theme']}.",
+                ]
+            )
+            if snapshot["risk_headline"]:
+                evidence.append(snapshot["risk_headline"])
+
+        if not answer_parts:
+            return self._basket_answer(classify_query(query), report)
+
+        answer = advice_preface + " ".join(answer_parts) + analogue_hint
+        return answer, self._dedupe_items(reasoning), self._dedupe_items(counterpoints), self._dedupe_items(evidence)
+
+    def _out_of_basket_answer(self, off_basket_tickers: list[str], report: OrchestrationReport) -> tuple[str, list[str], list[str], list[str]]:
+        requested = ", ".join(off_basket_tickers[:2])
+        basket_size = len(report.request.normalized_tickers)
+        answer = (
+            f"{requested} {'is' if len(off_basket_tickers[:2]) == 1 else 'are'} not in the current basket, so I cannot make a basket-relative inference for "
+            f"{'that name' if len(off_basket_tickers[:2]) == 1 else 'those names'} from this report. "
+            "Switch to a basket that contains it, or ask about one of the current constituents."
+        )
+        reasoning = [
+            "The reasoning agent only uses the already-computed basket report, so peer structure, narrative propagation, analogues, and risk flags are all scoped to the current constituents.",
+            f"The current basket contains {basket_size} symbols and excludes {requested}.",
+        ]
+        counterpoints = [
+            "If you want a single-name inference for an outside ticker, add it to a basket so the answer can stay comparative instead of falling back to generic market knowledge.",
+        ]
+        evidence = [f"Current basket tickers: {', '.join(report.request.normalized_tickers)}."]
+        return answer, reasoning, counterpoints, evidence
+
+    def _llm_answer(
+        self,
+        query: str,
+        query_type: str,
+        report: OrchestrationReport,
+        focus_tickers: list[str],
+        selected_model: str,
+        fallback_answer: str,
+        fallback_reasoning: list[str],
+        fallback_counterpoints: list[str],
+        fallback_evidence: list[str],
+    ) -> tuple[str, list[str], list[str], list[str]] | None:
+        self._last_llm_error = None
+        try:
+            request_kwargs: dict[str, object] = {
+                "model": selected_model,
+                "instructions": (
+                    "You are the Reasoning Query Agent for a cross-ticker intelligence application. "
+                    "Use only the supplied cross-agent context. Do not invent facts. "
+                    "Return valid JSON only with keys answer, reasoning, counterpoints, and evidence. "
+                    "The reasoning list must contain concise public-facing rationale bullets, not hidden chain-of-thought."
+                ),
+                "input": self._llm_prompt(
+                    query=query,
+                    query_type=query_type,
+                    report=report,
+                    focus_tickers=focus_tickers,
+                    fallback_answer=fallback_answer,
+                    fallback_reasoning=fallback_reasoning,
+                    fallback_counterpoints=fallback_counterpoints,
+                    fallback_evidence=fallback_evidence,
+                ),
+                "max_output_tokens": 2200,
+                "text_format": ReasoningLLMResponse,
+            }
+            if selected_model.startswith("gpt-5"):
+                request_kwargs["reasoning"] = {"effort": self.config.openai_reasoning_effort}
+            response = self.client.responses.parse(**request_kwargs)
+        except Exception as exc:
+            self._last_llm_error = NarrativeSynthesisAgent._format_exception(exc)
+            return None
+
+        payload = getattr(response, "output_parsed", None)
+        if payload is None:
+            self._last_llm_error = "Model response did not match the expected schema."
+            return None
+
+        answer = payload.answer.strip() or fallback_answer
+        reasoning = self._coerce_items(payload.reasoning, fallback_reasoning, limit=6)
+        counterpoints = self._coerce_items(payload.counterpoints, fallback_counterpoints, limit=4)
+        evidence = self._coerce_items(payload.evidence, fallback_evidence, limit=8)
+        return answer, reasoning, counterpoints, evidence
+
+    def _llm_prompt(
+        self,
+        query: str,
+        query_type: str,
+        report: OrchestrationReport,
+        focus_tickers: list[str],
+        fallback_answer: str,
+        fallback_reasoning: list[str],
+        fallback_counterpoints: list[str],
+        fallback_evidence: list[str],
+    ) -> str:
+        focus_block = "none"
+        if focus_tickers:
+            snapshots = []
+            for ticker in focus_tickers:
+                snapshot = self._ticker_snapshot(report, ticker)
+                if snapshot is None:
+                    continue
+                snapshots.append(f"{ticker}: {json.dumps(snapshot, default=str)}")
+            if snapshots:
+                focus_block = "\n".join(snapshots)
+
+        latest_metrics = self._select_frame_columns(
+            report.market.latest_metrics,
+            ["return_1d", "return_5d", "return_20d", "realized_vol", "drawdown", "relative_strength", "avg_pair_corr", "volume_shock"],
+        )
+        embedding_summary = self._select_frame_columns(
+            report.embeddings.fused_embedding_frame,
+            ["ticker", "x", "y", "cluster", "outlier_score", "headline_count", "news_sentiment"],
+        )
+        headline_summary = self._select_frame_columns(
+            report.news.news_frame,
+            ["published_at", "ticker", "related_tickers", "theme", "sentiment", "title", "source"],
+        )
+        anomaly_summary = self._select_frame_columns(
+            report.market.anomalies,
+            ["return_20d", "relative_strength", "avg_pair_corr", "volume_shock", "divergence_score"],
+        )
+
+        ranked_insights = "\n".join(
+            f"- [{insight.category}] {insight.title}: {insight.description} | evidence={'; '.join(insight.evidence[:3])}"
+            for insight in report.insights.ranked
+        ) or "none"
+        risk_summary = "\n".join(
+            f"- {alert.ticker} | {alert.alert_type} | {alert.reason} | evidence={'; '.join(alert.evidence[:2])}"
+            for alert in report.risk.alerts
+        ) or "none"
+        trace_summary = self._trace_block(report.traces)
+        market_edge_summary = self._frame_to_csv(report.market.similarity_edges, max_rows=20)
+
+        return (
+            "Return JSON only in this shape:\n"
+            '{"answer":"...", "reasoning":["..."], "counterpoints":["..."], "evidence":["..."]}\n'
+            "Constraints:\n"
+            "- Keep the answer concise and directly responsive.\n"
+            "- Provide 3 to 6 reasoning bullets, 1 to 4 counterpoints, and 3 to 8 evidence bullets.\n"
+            "- Use exact figures and ticker names when available.\n"
+            "- If the question is basket-level, reason across the whole basket.\n"
+            "- If the question is about a ticker in the basket, make the answer basket-relative rather than generic investment advice.\n"
+            "- Do not reveal hidden chain-of-thought; provide concise external reasoning bullets only.\n\n"
+            f"User question: {query}\n"
+            f"Detected query type: {query_type}\n"
+            f"Focus tickers in basket: {', '.join(focus_tickers) if focus_tickers else 'none'}\n\n"
+            "Deterministic fallback scaffold:\n"
+            f"Answer: {fallback_answer}\n"
+            f"Reasoning: {json.dumps(fallback_reasoning, ensure_ascii=True)}\n"
+            f"Counterpoints: {json.dumps(fallback_counterpoints, ensure_ascii=True)}\n"
+            f"Evidence: {json.dumps(fallback_evidence, ensure_ascii=True)}\n\n"
+            "Cross-agent context pack:\n"
+            f"Request: {json.dumps({'tickers': report.request.normalized_tickers, 'benchmark': report.request.normalized_benchmark, 'lookback_days': report.request.lookback_days, 'embedding_window': report.request.embedding_window, 'news_enabled': report.request.enable_news, 'peer_groups': report.request.peer_groups}, default=str)}\n"
+            f"Synthesis executive summary: {report.synthesis.executive_summary}\n"
+            f"Synthesis why basket matters: {report.synthesis.why_multi_ticker_matters}\n"
+            f"Synthesis deep dive: {report.synthesis.deep_dive}\n"
+            f"Market regime summary: {json.dumps(report.market.regime_summary, default=str)}\n"
+            f"Latest market metrics:\n{self._frame_to_csv(latest_metrics)}\n"
+            f"Top correlation edges:\n{market_edge_summary}\n"
+            f"Lead-lag table:\n{self._frame_to_csv(report.market.lead_lag, max_rows=20)}\n"
+            f"Market anomalies:\n{self._frame_to_csv(anomaly_summary, max_rows=12)}\n"
+            f"News theme summary:\n{self._frame_to_csv(report.news.theme_summary, max_rows=12)}\n"
+            f"Narrative clusters:\n{self._frame_to_csv(report.news.narrative_clusters, max_rows=15)}\n"
+            f"Recent headline evidence:\n{self._frame_to_csv(headline_summary, max_rows=18)}\n"
+            f"Embedding summary:\n{self._frame_to_csv(embedding_summary)}\n"
+            f"Nearest neighbors:\n{self._frame_to_csv(report.embeddings.neighbor_frame, max_rows=24)}\n"
+            f"Outlier scores:\n{self._frame_to_csv(report.embeddings.outlier_scores, max_rows=12)}\n"
+            f"Historical analogues:\n{self._frame_to_csv(report.embeddings.analogue_frame, max_rows=5)}\n"
+            f"Vector search backend: {report.embeddings.vector_index_backend}\n"
+            f"Focus ticker snapshots:\n{focus_block}\n"
+            f"Ranked insights:\n{ranked_insights}\n"
+            f"Risk alerts:\n{risk_summary}\n"
+            f"Agent traces:\n{trace_summary}\n"
+        )
+
+    def _ticker_snapshot(self, report: OrchestrationReport, ticker: str) -> dict[str, object] | None:
+        if ticker not in report.market.latest_metrics.index:
+            return None
+
+        row = report.market.latest_metrics.loc[ticker]
+        peer_group = CrossTickerInsightAgent._find_peer_group(report.request, ticker)
+        peer_label = "saved peer group"
+        if not peer_group:
+            peer_group = CrossTickerInsightAgent._cluster_peers(report.embeddings, ticker)
+            peer_label = "cluster peers"
+        peer_return_20d = float(report.market.latest_metrics.loc[peer_group, "return_20d"].mean()) if peer_group else float(report.market.regime_summary["basket_return_20d"])
+        headline_items = report.news.ticker_map.get(ticker, [])
+        dominant_theme = "no mapped theme"
+        if headline_items:
+            dominant_theme = pd.Series([item.theme for item in headline_items]).value_counts().index[0]
+        neighbors = report.embeddings.neighbor_frame.loc[report.embeddings.neighbor_frame["ticker"] == ticker, "neighbor"].head(3).tolist()
+        outlier_lookup = report.embeddings.outlier_scores.set_index("ticker")["outlier_score"] if not report.embeddings.outlier_scores.empty else pd.Series(dtype=float)
+        outlier_threshold = float(outlier_lookup.quantile(0.75)) if not outlier_lookup.empty else 0.0
+        outlier_score = float(outlier_lookup.get(ticker, 0.0))
+        matching_alerts = [alert for alert in report.risk.alerts if alert.ticker == ticker]
+
+        return {
+            "return_20d": float(row["return_20d"]),
+            "relative_strength": float(row["relative_strength"]),
+            "avg_pair_corr": float(row["avg_pair_corr"]),
+            "headline_count": len(headline_items),
+            "dominant_theme": dominant_theme,
+            "neighbors": ", ".join(neighbors) if neighbors else "no close neighbors",
+            "peer_label": peer_label,
+            "peer_members": ", ".join(peer_group),
+            "peer_return_20d": peer_return_20d,
+            "is_divergent": outlier_score >= outlier_threshold and outlier_threshold > 0,
+            "risk_reason": matching_alerts[0].reason if matching_alerts else "",
+            "risk_headline": matching_alerts[0].headline if matching_alerts else "",
+        }
+
+    @staticmethod
+    def _extract_query_mentions(query: str, report: OrchestrationReport) -> list[str]:
+        lowered = query.lower()
+        matches: list[tuple[int, str]] = []
+        candidates = sorted(set(TICKER_QUERY_ALIASES) | set(report.request.normalized_tickers))
+        for ticker in candidates:
+            tokens = (ticker.lower(),) + TICKER_QUERY_ALIASES.get(ticker, ())
+            positions: list[int] = []
+            for token in tokens:
+                match = re.search(rf"(?<![a-z0-9]){re.escape(token.lower())}(?![a-z0-9])", lowered)
+                if match is not None:
+                    positions.append(match.start())
+            if positions:
+                matches.append((min(positions), ticker))
+        ordered = [ticker for _, ticker in sorted(matches, key=lambda item: item[0])]
+        return ReasoningQueryAgent._dedupe_items(ordered)
+
+    @staticmethod
+    def _dedupe_items(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in items:
+            normalized = item.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            ordered.append(normalized)
+        return ordered
+
+    @staticmethod
+    def _frame_to_csv(frame: pd.DataFrame, max_rows: int | None = None, round_digits: int = 4) -> str:
+        if frame.empty:
+            return "none"
+        working = frame.copy()
+        if max_rows is not None:
+            working = working.head(max_rows)
+        numeric_columns = working.select_dtypes(include=[np.number]).columns
+        if len(numeric_columns) > 0:
+            working.loc[:, numeric_columns] = working.loc[:, numeric_columns].round(round_digits)
+        if "published_at" in working.columns:
+            working.loc[:, "published_at"] = pd.to_datetime(working["published_at"]).dt.strftime("%Y-%m-%d %H:%M")
+        return working.to_csv(index=True)
+
+    @staticmethod
+    def _trace_block(traces: list[AgentTrace]) -> str:
+        if not traces:
+            return "none"
+        blocks = []
+        for trace in traces:
+            blocks.append(
+                (
+                    f"{trace.agent_name} [{trace.status}]\n"
+                    f"Objective: {trace.objective}\n"
+                    f"Actions: {json.dumps(trace.actions[:3], ensure_ascii=True)}\n"
+                    f"Metrics: {json.dumps(trace.metrics, default=str)}"
+                )
+            )
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _select_frame_columns(frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+        if frame.empty:
+            return frame.copy()
+        existing = [column for column in columns if column in frame.columns]
+        if not existing:
+            return pd.DataFrame()
+        return frame.loc[:, existing].copy()
+
+    @staticmethod
+    def _coerce_items(value: object, fallback: list[str], limit: int) -> list[str]:
+        if not isinstance(value, list):
+            return fallback
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return ReasoningQueryAgent._dedupe_items(items)[:limit] or fallback
 
 
 class RiskAgent(BaseAgent):
@@ -544,6 +1076,7 @@ class OrchestratorAgent(BaseAgent):
         self.embedding_agent = EmbeddingAgent(build_embedding_provider(config.openai_api_key, config.openai_embedding_model))
         self.insight_agent = CrossTickerInsightAgent()
         self.synthesis_agent = NarrativeSynthesisAgent(config)
+        self.reasoning_query_agent = ReasoningQueryAgent(config)
         self.risk_agent = RiskAgent()
 
     def run(self, request: AnalysisRequest) -> OrchestrationReport:
@@ -593,5 +1126,7 @@ class OrchestratorAgent(BaseAgent):
         ]
         return scaffold
 
-    def answer_query(self, query: str, report: OrchestrationReport) -> QueryResponse:
+    def answer_query(self, query: str, report: OrchestrationReport, mode: str = "overview", model_override: str | None = None) -> QueryResponse:
+        if mode == "reasoning":
+            return self.reasoning_query_agent.answer_query(query, report, model_override=model_override)
         return self.synthesis_agent.answer_query(query, report)

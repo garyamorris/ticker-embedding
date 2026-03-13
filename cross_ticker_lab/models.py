@@ -187,6 +187,11 @@ class QueryResponse:
     query_type: str
     answer: str
     evidence: list[str]
+    mode: str = "overview"
+    reasoning: list[str] = field(default_factory=list)
+    counterpoints: list[str] = field(default_factory=list)
+    model_name: str | None = None
+    warning: str | None = None
 
 
 @dataclass(slots=True)

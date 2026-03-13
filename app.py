@@ -7,7 +7,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from cross_ticker_lab import AnalysisRequest, OrchestratorAgent, PRESETS, load_config
+from cross_ticker_lab import AnalysisRequest, OPENAI_REASONING_MODELS, OrchestratorAgent, PRESETS, load_config
 
 
 st.set_page_config(page_title="Cross-Ticker Intelligence Lab", layout="wide", initial_sidebar_state="expanded")
@@ -439,14 +439,48 @@ def main() -> None:
 
     with st.container(border=True):
         st.subheader("Natural-Language Query")
-        query = st.text_input(
-            "Ask a basket-level question",
+        query = st.text_area(
+            "Ask a basket or constituent question",
             value="What is moving together and why?",
-            help="The answer is generated from the already-computed market, embedding, and news analysis.",
+            height=88,
+            help="The answer is generated from the already-computed basket report. The reasoning agent can explain chain-of-thought style evidence for the basket or a ticker already inside the current basket.",
         )
+        query_mode = st.radio(
+            "Agent mode",
+            options=["Reasoning agent", "Overview"],
+            index=0,
+            horizontal=True,
+            help="Reasoning agent chains regime, peer structure, narratives, analogues, and risk flags. Overview returns the quick basket summary.",
+        )
+        reasoning_model = None
+        if query_mode == "Reasoning agent":
+            available_models = list(OPENAI_REASONING_MODELS.keys())
+            default_model = config.openai_reasoning_model if config.openai_reasoning_model in OPENAI_REASONING_MODELS else available_models[0]
+            reasoning_model = st.selectbox(
+                "OpenAI reasoning model",
+                options=available_models,
+                index=available_models.index(default_model),
+                format_func=lambda model: f"{model} - {OPENAI_REASONING_MODELS[model]}",
+                help="Used when OpenAI reasoning is enabled. If the API key or synthesis flag is missing, the app falls back to deterministic reasoning.",
+            )
+            if not config.openai_api_key or not config.enable_llm_synthesis:
+                st.caption("OpenAI reasoning is currently inactive. Set `OPENAI_API_KEY` and `CROSS_TICKER_ENABLE_LLM_SYNTHESIS=1` to use the selected model.")
         if st.button("Answer question", type="primary"):
-            response = get_orchestrator().answer_query(query, report)
-            st.markdown(f"**Answer ({response.query_type.replace('_', ' ')}):** {response.answer}")
+            mode = "reasoning" if query_mode == "Reasoning agent" else "overview"
+            response = get_orchestrator().answer_query(query, report, mode=mode, model_override=reasoning_model)
+            st.markdown(f"**Answer ({response.mode} | {response.query_type.replace('_', ' ')}):** {response.answer}")
+            if response.model_name:
+                st.caption(f"Model: `{response.model_name}`")
+            if response.warning:
+                st.warning(response.warning, icon="⚠️")
+            if response.reasoning:
+                st.markdown("**Reasoning path**")
+                for item in response.reasoning:
+                    st.markdown(f"- {item}")
+            if response.counterpoints:
+                st.markdown("**Counterpoints**")
+                for item in response.counterpoints:
+                    st.markdown(f"- {item}")
             if response.evidence:
                 st.markdown("**Supporting evidence**")
                 for item in response.evidence:

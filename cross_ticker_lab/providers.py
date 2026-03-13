@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import math
+import ssl
 from abc import ABC, abstractmethod
 from datetime import date, datetime, timedelta, timezone
 
+import httpx
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import TruncatedSVD
@@ -28,6 +30,11 @@ try:  # pragma: no cover - optional dependency
     from openai import OpenAI
 except ImportError:  # pragma: no cover - provider gracefully falls back
     OpenAI = None
+
+try:  # pragma: no cover - optional dependency
+    import truststore
+except ImportError:  # pragma: no cover - system trust fallback unavailable
+    truststore = None
 
 
 def _stable_seed(*parts: str) -> int:
@@ -74,6 +81,18 @@ def _lexical_sentiment(text: str) -> float:
 
 def infer_sector(ticker: str) -> str:
     return TICKER_SECTOR_MAP.get(ticker.upper(), "general-equity")
+
+
+def build_openai_client(api_key: str) -> OpenAI:
+    if OpenAI is None:
+        raise RuntimeError("openai package is not installed")
+
+    http_client = None
+    if truststore is not None:
+        # Use the host OS trust store so enterprise or Windows-managed roots work.
+        ssl_context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        http_client = httpx.Client(verify=ssl_context, timeout=httpx.Timeout(120.0, connect=30.0))
+    return OpenAI(api_key=api_key, http_client=http_client)
 
 
 class MarketDataProvider(ABC):
@@ -485,9 +504,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     name = "openai"
 
     def __init__(self, api_key: str, model: str) -> None:
-        if OpenAI is None:
-            raise RuntimeError("openai package is not installed")
-        self.client = OpenAI(api_key=api_key)
+        self.client = build_openai_client(api_key=api_key)
         self.model = model
 
     def fit_transform(self, texts: list[str]) -> np.ndarray:

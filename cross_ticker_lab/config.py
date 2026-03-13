@@ -24,7 +24,18 @@ class AppConfig:
     openai_api_key: str | None
     openai_embedding_model: str
     openai_response_model: str
+    openai_reasoning_model: str
+    openai_reasoning_effort: str
     enable_llm_synthesis: bool
+
+
+OPENAI_REASONING_MODELS: dict[str, str] = {
+    "gpt-5.4-pro": "Strongest reasoning, highest latency",
+    "gpt-5.4": "Best general-purpose GPT-5 model",
+    "gpt-5-mini": "Faster lower-cost GPT-5 option",
+    "gpt-4.1": "Stable general fallback",
+    "gpt-4.1-mini": "Fast lower-cost GPT-4.1 fallback",
+}
 
 
 TECH_PRESET = DemoPreset(
@@ -221,6 +232,8 @@ def load_config() -> AppConfig:
     return AppConfig(
         openai_api_key=api_key,
         openai_embedding_model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
-        openai_response_model=os.getenv("OPENAI_RESPONSE_MODEL", "gpt-4.1-mini"),
+        openai_response_model=os.getenv("OPENAI_RESPONSE_MODEL", "gpt-5.4"),
+        openai_reasoning_model=os.getenv("OPENAI_REASONING_MODEL", "gpt-5.4-pro"),
+        openai_reasoning_effort=os.getenv("OPENAI_REASONING_EFFORT", "medium"),
         enable_llm_synthesis=os.getenv("CROSS_TICKER_ENABLE_LLM_SYNTHESIS", "0") == "1",
     )

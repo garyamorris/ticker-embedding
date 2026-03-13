@@ -63,3 +63,5 @@ start.cmd
 
 - If live Yahoo Finance calls fail, the app falls back to deterministic synthetic market and news data so the demo still runs.
 - If `OPENAI_API_KEY` is missing, the natural-language layer uses deterministic synthesis instead of a hosted model.
+- The query panel has two answer modes: `Overview` for the short basket summary, and `Reasoning agent` for deeper basket or in-basket ticker reasoning with explicit counterpoints.
+- The reasoning query UI now includes an OpenAI model dropdown. The default env values target `gpt-5.4` for synthesis and `gpt-5.4-pro` for deeper reasoning, with deterministic fallback when OpenAI is not enabled.
