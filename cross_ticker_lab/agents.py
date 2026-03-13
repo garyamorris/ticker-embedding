@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -730,7 +731,19 @@ class ReasoningQueryAgent(BaseAgent):
         fallback_evidence: list[str],
     ) -> tuple[str, list[str], list[str], list[str]] | None:
         self._last_llm_error = None
-        try:
+        attempts = [
+            {
+                "compact": False,
+                "max_output_tokens": 2200,
+                "effort": self._reasoning_effort_for_model(selected_model, retry=False),
+            },
+            {
+                "compact": True,
+                "max_output_tokens": 3200,
+                "effort": self._reasoning_effort_for_model(selected_model, retry=True),
+            },
+        ]
+        for attempt_index, attempt in enumerate(attempts):
             request_kwargs: dict[str, object] = {
                 "model": selected_model,
                 "instructions": (
@@ -742,33 +755,47 @@ class ReasoningQueryAgent(BaseAgent):
                 "input": self._llm_prompt(
                     query=query,
                     query_type=query_type,
-                    report=report,
-                    focus_tickers=focus_tickers,
-                    fallback_answer=fallback_answer,
-                    fallback_reasoning=fallback_reasoning,
-                    fallback_counterpoints=fallback_counterpoints,
-                    fallback_evidence=fallback_evidence,
-                ),
-                "max_output_tokens": 2200,
+                        report=report,
+                        focus_tickers=focus_tickers,
+                        fallback_answer=fallback_answer,
+                        fallback_reasoning=fallback_reasoning,
+                        fallback_counterpoints=fallback_counterpoints,
+                        fallback_evidence=fallback_evidence,
+                        compact=attempt["compact"],
+                    ),
+                "max_output_tokens": attempt["max_output_tokens"],
                 "text_format": ReasoningLLMResponse,
             }
             if selected_model.startswith("gpt-5"):
-                request_kwargs["reasoning"] = {"effort": self.config.openai_reasoning_effort}
-            response = self.client.responses.parse(**request_kwargs)
-        except Exception as exc:
-            self._last_llm_error = NarrativeSynthesisAgent._format_exception(exc)
-            return None
+                request_kwargs["reasoning"] = {"effort": attempt["effort"]}
+                request_kwargs["text"] = {"verbosity": "low"}
+            try:
+                response = self.client.responses.parse(**request_kwargs)
+            except Exception as exc:
+                self._last_llm_error = NarrativeSynthesisAgent._format_exception(exc)
+                if attempt_index < len(attempts) - 1:
+                    time.sleep(1.0)
+                    continue
+                return None
 
-        payload = getattr(response, "output_parsed", None)
-        if payload is None:
-            self._last_llm_error = "Model response did not match the expected schema."
-            return None
+            payload = getattr(response, "output_parsed", None)
+            if payload is None:
+                incomplete = getattr(response, "incomplete_details", None)
+                if incomplete is not None and getattr(incomplete, "reason", None):
+                    self._last_llm_error = f"Model response was incomplete: {incomplete.reason}."
+                else:
+                    self._last_llm_error = "Model response did not match the expected schema."
+                if attempt_index < len(attempts) - 1:
+                    continue
+                return None
 
-        answer = payload.answer.strip() or fallback_answer
-        reasoning = self._coerce_items(payload.reasoning, fallback_reasoning, limit=6)
-        counterpoints = self._coerce_items(payload.counterpoints, fallback_counterpoints, limit=4)
-        evidence = self._coerce_items(payload.evidence, fallback_evidence, limit=8)
-        return answer, reasoning, counterpoints, evidence
+            answer = payload.answer.strip() or fallback_answer
+            reasoning = self._coerce_items(payload.reasoning, fallback_reasoning, limit=6)
+            counterpoints = self._coerce_items(payload.counterpoints, fallback_counterpoints, limit=4)
+            evidence = self._coerce_items(payload.evidence, fallback_evidence, limit=8)
+            return answer, reasoning, counterpoints, evidence
+
+        return None
 
     def _llm_prompt(
         self,
@@ -780,6 +807,7 @@ class ReasoningQueryAgent(BaseAgent):
         fallback_reasoning: list[str],
         fallback_counterpoints: list[str],
         fallback_evidence: list[str],
+        compact: bool = False,
     ) -> str:
         focus_block = "none"
         if focus_tickers:
@@ -818,14 +846,25 @@ class ReasoningQueryAgent(BaseAgent):
             for alert in report.risk.alerts
         ) or "none"
         trace_summary = self._trace_block(report.traces)
-        market_edge_summary = self._frame_to_csv(report.market.similarity_edges, max_rows=20)
+        market_edge_summary = self._frame_to_csv(report.market.similarity_edges, max_rows=12 if compact else 20)
+        latest_metric_rows = 12 if compact else None
+        anomaly_rows = 8 if compact else 12
+        theme_rows = 8 if compact else 12
+        narrative_rows = 8 if compact else 15
+        headline_rows = 10 if compact else 18
+        neighbor_rows = 14 if compact else 24
+        outlier_rows = 8 if compact else 12
+        analogue_rows = 4 if compact else 5
+        deep_dive = report.synthesis.deep_dive if not compact else "omitted in compact retry; rely on ranked insights below."
+        trace_block = trace_summary if not compact else "omitted in compact retry."
+        embedding_block = self._frame_to_csv(embedding_summary, max_rows=12 if compact else None)
 
         return (
             "Return JSON only in this shape:\n"
             '{"answer":"...", "reasoning":["..."], "counterpoints":["..."], "evidence":["..."]}\n'
             "Constraints:\n"
             "- Keep the answer concise and directly responsive.\n"
-            "- Provide 3 to 6 reasoning bullets, 1 to 4 counterpoints, and 3 to 8 evidence bullets.\n"
+            "- Provide 3 to 5 reasoning bullets, 1 to 3 counterpoints, and 3 to 6 evidence bullets.\n"
             "- Use exact figures and ticker names when available.\n"
             "- If the question is basket-level, reason across the whole basket.\n"
             "- If the question is about a ticker in the basket, make the answer basket-relative rather than generic investment advice.\n"
@@ -842,24 +881,24 @@ class ReasoningQueryAgent(BaseAgent):
             f"Request: {json.dumps({'tickers': report.request.normalized_tickers, 'benchmark': report.request.normalized_benchmark, 'lookback_days': report.request.lookback_days, 'embedding_window': report.request.embedding_window, 'news_enabled': report.request.enable_news, 'peer_groups': report.request.peer_groups}, default=str)}\n"
             f"Synthesis executive summary: {report.synthesis.executive_summary}\n"
             f"Synthesis why basket matters: {report.synthesis.why_multi_ticker_matters}\n"
-            f"Synthesis deep dive: {report.synthesis.deep_dive}\n"
+            f"Synthesis deep dive: {deep_dive}\n"
             f"Market regime summary: {json.dumps(report.market.regime_summary, default=str)}\n"
-            f"Latest market metrics:\n{self._frame_to_csv(latest_metrics)}\n"
+            f"Latest market metrics:\n{self._frame_to_csv(latest_metrics, max_rows=latest_metric_rows)}\n"
             f"Top correlation edges:\n{market_edge_summary}\n"
             f"Lead-lag table:\n{self._frame_to_csv(report.market.lead_lag, max_rows=20)}\n"
-            f"Market anomalies:\n{self._frame_to_csv(anomaly_summary, max_rows=12)}\n"
-            f"News theme summary:\n{self._frame_to_csv(report.news.theme_summary, max_rows=12)}\n"
-            f"Narrative clusters:\n{self._frame_to_csv(report.news.narrative_clusters, max_rows=15)}\n"
-            f"Recent headline evidence:\n{self._frame_to_csv(headline_summary, max_rows=18)}\n"
-            f"Embedding summary:\n{self._frame_to_csv(embedding_summary)}\n"
-            f"Nearest neighbors:\n{self._frame_to_csv(report.embeddings.neighbor_frame, max_rows=24)}\n"
-            f"Outlier scores:\n{self._frame_to_csv(report.embeddings.outlier_scores, max_rows=12)}\n"
-            f"Historical analogues:\n{self._frame_to_csv(report.embeddings.analogue_frame, max_rows=5)}\n"
+            f"Market anomalies:\n{self._frame_to_csv(anomaly_summary, max_rows=anomaly_rows)}\n"
+            f"News theme summary:\n{self._frame_to_csv(report.news.theme_summary, max_rows=theme_rows)}\n"
+            f"Narrative clusters:\n{self._frame_to_csv(report.news.narrative_clusters, max_rows=narrative_rows)}\n"
+            f"Recent headline evidence:\n{self._frame_to_csv(headline_summary, max_rows=headline_rows)}\n"
+            f"Embedding summary:\n{embedding_block}\n"
+            f"Nearest neighbors:\n{self._frame_to_csv(report.embeddings.neighbor_frame, max_rows=neighbor_rows)}\n"
+            f"Outlier scores:\n{self._frame_to_csv(report.embeddings.outlier_scores, max_rows=outlier_rows)}\n"
+            f"Historical analogues:\n{self._frame_to_csv(report.embeddings.analogue_frame, max_rows=analogue_rows)}\n"
             f"Vector search backend: {report.embeddings.vector_index_backend}\n"
             f"Focus ticker snapshots:\n{focus_block}\n"
             f"Ranked insights:\n{ranked_insights}\n"
             f"Risk alerts:\n{risk_summary}\n"
-            f"Agent traces:\n{trace_summary}\n"
+            f"Agent traces:\n{trace_block}\n"
         )
 
     def _ticker_snapshot(self, report: OrchestrationReport, ticker: str) -> dict[str, object] | None:
@@ -972,6 +1011,14 @@ class ReasoningQueryAgent(BaseAgent):
             return fallback
         items = [str(item).strip() for item in value if str(item).strip()]
         return ReasoningQueryAgent._dedupe_items(items)[:limit] or fallback
+
+    def _reasoning_effort_for_model(self, model: str, retry: bool) -> str:
+        configured = self.config.openai_reasoning_effort
+        if not retry:
+            return configured
+        if model.endswith("-pro"):
+            return "medium"
+        return "low"
 
 
 class RiskAgent(BaseAgent):
